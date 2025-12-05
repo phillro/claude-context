@@ -22,8 +22,12 @@ export interface ContextMcpConfig {
 export interface CodebaseSnapshot {
     indexedCodebases: string[];
     indexingCodebases: string[] | Record<string, number>;  // Array (legacy) or Map of codebase path to progress percentage
+    lastSyncTime: Record<string, number>;  // Map of codebase path to last sync timestamp (ms)
     lastUpdated: string;
 }
+
+// Default staleness threshold in seconds (60 seconds)
+export const DEFAULT_SYNC_STALENESS_THRESHOLD_SECONDS = 60;
 
 // Helper function to get default model for each provider
 export function getDefaultModelForProvider(provider: string): string {

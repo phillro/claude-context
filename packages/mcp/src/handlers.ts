@@ -4,6 +4,7 @@ import * as crypto from "crypto";
 import { Context, COLLECTION_LIMIT_MESSAGE } from "@dannyboy2042/claude-context-core";
 import { SnapshotManager } from "./snapshot.js";
 import { ensureAbsolutePath, truncateContent, trackCodebasePath } from "./utils.js";
+import { DEFAULT_SYNC_STALENESS_THRESHOLD_SECONDS } from "./config.js";
 
 export class ToolHandlers {
     private context: Context;
@@ -30,10 +31,15 @@ export class ToolHandlers {
      */
     private async syncIndexedCodebasesFromCloud(): Promise<void> {
         try {
-            console.log(`[SYNC-CLOUD] 🔄 Syncing indexed codebases from Zilliz Cloud...`);
-
-            // Get all collections using the interface method
+            // Skip cloud sync when using LanceDB (local storage)
+            // LanceDB doesn't need cloud sync - the local snapshot is the source of truth
             const vectorDb = this.context.getVectorDatabase();
+            if (vectorDb.constructor.name === 'LanceDBVectorDatabase') {
+                console.log(`[SYNC-CLOUD] ⏭️  Skipping cloud sync - using local LanceDB`);
+                return;
+            }
+
+            console.log(`[SYNC-CLOUD] 🔄 Syncing indexed codebases from Zilliz Cloud...`);
 
             // Use the new listCollections method from the interface
             const collections = await vectorDb.listCollections();
@@ -384,8 +390,9 @@ export class ToolHandlers {
             });
             console.log(`[BACKGROUND-INDEX] ✅ Indexing completed successfully! Files: ${stats.indexedFiles}, Chunks: ${stats.totalChunks}`);
 
-            // Move from indexing to indexed list
+            // Move from indexing to indexed list and set initial sync time
             this.snapshotManager.moveFromIndexingToIndexed(absolutePath);
+            this.snapshotManager.setLastSyncTime(absolutePath);
             this.indexingStats = { indexedFiles: stats.indexedFiles, totalChunks: stats.totalChunks };
 
             // Save snapshot after updating codebase lists
@@ -465,6 +472,40 @@ export class ToolHandlers {
                 indexingStatusMessage = `\n⚠️  **Indexing in Progress**: This codebase is currently being indexed in the background. Search results may be incomplete until indexing completes.`;
             }
 
+            // Auto-sync: Check if codebase is stale and run incremental sync before search
+            let syncMessage = '';
+            if (isIndexed && !isIndexing) {
+                const lastSyncTime = this.snapshotManager.getLastSyncTime(absolutePath);
+                const isStale = this.snapshotManager.isCodebaseStale(absolutePath, DEFAULT_SYNC_STALENESS_THRESHOLD_SECONDS);
+                const ageSeconds = lastSyncTime ? Math.round((Date.now() - lastSyncTime) / 1000) : null;
+
+                if (isStale) {
+                    console.log(`[SEARCH] 🔄 Codebase is stale (>${DEFAULT_SYNC_STALENESS_THRESHOLD_SECONDS}s since last sync), running incremental sync...`);
+                    try {
+                        const syncStats = await this.context.reindexByChange(absolutePath);
+                        const hasChanges = syncStats.added > 0 || syncStats.removed > 0 || syncStats.modified > 0;
+
+                        // Update last sync time
+                        this.snapshotManager.setLastSyncTime(absolutePath);
+                        this.snapshotManager.saveCodebaseSnapshot();
+
+                        if (hasChanges) {
+                            console.log(`[SEARCH] ✅ Incremental sync completed: ${syncStats.added} added, ${syncStats.removed} removed, ${syncStats.modified} modified`);
+                            syncMessage = `\n🔄 **Auto-synced**: Found and indexed ${syncStats.added} added, ${syncStats.removed} removed, ${syncStats.modified} modified files before search.`;
+                        } else {
+                            console.log(`[SEARCH] ✅ Incremental sync completed: no changes detected`);
+                            syncMessage = `\n✅ **Auto-sync**: Checked for changes (last sync: ${ageSeconds !== null ? ageSeconds + 's ago' : 'never'}) - no updates needed.`;
+                        }
+                    } catch (syncError: any) {
+                        console.warn(`[SEARCH] ⚠️ Incremental sync failed, continuing with search:`, syncError.message || syncError);
+                        syncMessage = `\n⚠️ **Auto-sync failed**: ${syncError.message || 'Unknown error'} - searching with existing index.`;
+                    }
+                } else {
+                    console.log(`[SEARCH] ✅ Codebase is fresh (synced within ${DEFAULT_SYNC_STALENESS_THRESHOLD_SECONDS}s), skipping sync`);
+                    syncMessage = `\n✅ **Index fresh**: Last synced ${ageSeconds}s ago (threshold: ${DEFAULT_SYNC_STALENESS_THRESHOLD_SECONDS}s).`;
+                }
+            }
+
             console.log(`[SEARCH] Searching in codebase: ${absolutePath}`);
             console.log(`[SEARCH] Query: "${query}"`);
             console.log(`[SEARCH] Indexing status: ${isIndexing ? 'In Progress' : 'Completed'}`);
@@ -528,7 +569,7 @@ export class ToolHandlers {
                     `   Context: \n\`\`\`${result.language}\n${context}\n\`\`\`\n`;
             }).join('\n');
 
-            let resultMessage = `Found ${searchResults.length} results for query: "${query}" in codebase '${absolutePath}'${indexingStatusMessage}\n\n${formattedResults}`;
+            let resultMessage = `Found ${searchResults.length} results for query: "${query}" in codebase '${absolutePath}'${syncMessage}${indexingStatusMessage}\n\n${formattedResults}`;
 
             if (isIndexing) {
                 resultMessage += `\n\n💡 **Tip**: This codebase is still being indexed. More results may become available as indexing progresses.`;

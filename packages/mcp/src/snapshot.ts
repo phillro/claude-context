@@ -7,6 +7,7 @@ export class SnapshotManager {
     private snapshotFilePath: string;
     private indexedCodebases: string[] = [];
     private indexingCodebases: Map<string, number> = new Map(); // Map of codebase path to progress percentage
+    private lastSyncTime: Map<string, number> = new Map(); // Map of codebase path to last sync timestamp (ms)
 
     constructor() {
         // Initialize snapshot file path
@@ -118,6 +119,36 @@ export class SnapshotManager {
         this.addIndexedCodebase(codebasePath);
     }
 
+    public getLastSyncTime(codebasePath: string): number | undefined {
+        // Read from JSON file to ensure consistency and persistence
+        try {
+            if (!fs.existsSync(this.snapshotFilePath)) {
+                return undefined;
+            }
+
+            const snapshotData = fs.readFileSync(this.snapshotFilePath, 'utf8');
+            const snapshot: CodebaseSnapshot = JSON.parse(snapshotData);
+
+            return snapshot.lastSyncTime?.[codebasePath];
+        } catch (error) {
+            console.warn(`[SNAPSHOT-DEBUG] Error reading lastSyncTime from file for ${codebasePath}:`, error);
+            return this.lastSyncTime.get(codebasePath);
+        }
+    }
+
+    public setLastSyncTime(codebasePath: string, timestamp?: number): void {
+        this.lastSyncTime.set(codebasePath, timestamp || Date.now());
+    }
+
+    public isCodebaseStale(codebasePath: string, thresholdSeconds: number): boolean {
+        const lastSync = this.getLastSyncTime(codebasePath);
+        if (!lastSync) {
+            return true; // Never synced, consider stale
+        }
+        const ageSeconds = (Date.now() - lastSync) / 1000;
+        return ageSeconds > thresholdSeconds;
+    }
+
     public loadCodebaseSnapshot(): void {
         console.log('[SNAPSHOT-DEBUG] Loading codebase snapshot from:', this.snapshotFilePath);
 
@@ -169,6 +200,17 @@ export class SnapshotManager {
             this.indexedCodebases = validCodebases;
             this.indexingCodebases = new Map(); // Reset indexing codebases since they were interrupted
 
+            // Restore lastSyncTime
+            this.lastSyncTime = new Map();
+            if (snapshot.lastSyncTime && typeof snapshot.lastSyncTime === 'object') {
+                for (const [path, timestamp] of Object.entries(snapshot.lastSyncTime)) {
+                    if (validCodebases.includes(path)) {
+                        this.lastSyncTime.set(path, timestamp as number);
+                    }
+                }
+                console.log(`[SNAPSHOT-DEBUG] Restored lastSyncTime for ${this.lastSyncTime.size} codebases.`);
+            }
+
             console.log(`[SNAPSHOT-DEBUG] Restored ${validCodebases.length} fully indexed codebases.`);
             console.log(`[SNAPSHOT-DEBUG] Reset ${indexingCodebasesList.length} interrupted indexing codebases.`);
 
@@ -198,15 +240,21 @@ export class SnapshotManager {
                 console.log('[SNAPSHOT-DEBUG] Created snapshot directory:', snapshotDir);
             }
 
-            // Convert Map to object for JSON serialization
+            // Convert Maps to objects for JSON serialization
             const indexingCodebasesObject: Record<string, number> = {};
             this.indexingCodebases.forEach((progress, path) => {
                 indexingCodebasesObject[path] = progress;
             });
 
+            const lastSyncTimeObject: Record<string, number> = {};
+            this.lastSyncTime.forEach((timestamp, path) => {
+                lastSyncTimeObject[path] = timestamp;
+            });
+
             const snapshot: CodebaseSnapshot = {
                 indexedCodebases: this.indexedCodebases,
                 indexingCodebases: indexingCodebasesObject,
+                lastSyncTime: lastSyncTimeObject,
                 lastUpdated: new Date().toISOString()
             };
 
