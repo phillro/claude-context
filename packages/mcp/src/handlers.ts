@@ -30,10 +30,15 @@ export class ToolHandlers {
      */
     private async syncIndexedCodebasesFromCloud(): Promise<void> {
         try {
-            console.log(`[SYNC-CLOUD] 🔄 Syncing indexed codebases from Zilliz Cloud...`);
-
-            // Get all collections using the interface method
+            // Skip cloud sync when using LanceDB (local storage)
+            // LanceDB doesn't need cloud sync - the local snapshot is the source of truth
             const vectorDb = this.context.getVectorDatabase();
+            if (vectorDb.constructor.name === 'LanceDBVectorDatabase') {
+                console.log(`[SYNC-CLOUD] ⏭️  Skipping cloud sync - using local LanceDB`);
+                return;
+            }
+
+            console.log(`[SYNC-CLOUD] 🔄 Syncing indexed codebases from Zilliz Cloud...`);
 
             // Use the new listCollections method from the interface
             const collections = await vectorDb.listCollections();
