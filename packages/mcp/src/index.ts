@@ -21,7 +21,7 @@ import {
     ListToolsRequestSchema,
     CallToolRequestSchema
 } from "@modelcontextprotocol/sdk/types.js";
-import { Context } from "@zilliz/claude-context-core";
+import { Context, AstCodeSplitter, envManager } from "@zilliz/claude-context-core";
 import { MilvusVectorDatabase } from "@zilliz/claude-context-core";
 
 // Import our modular components
@@ -65,10 +65,18 @@ class ContextMcpServer {
             ...(config.milvusToken && { token: config.milvusToken })
         });
 
+        // Initialize code splitter with configurable chunk size
+        // BAAI/bge-large-en-v1.5 has 512 token limit, so default to smaller chunks (~1600 chars = ~400 tokens)
+        const chunkSize = parseInt(envManager.get('CHUNK_SIZE') || '1600', 10);
+        const chunkOverlap = parseInt(envManager.get('CHUNK_OVERLAP') || '200', 10);
+        console.log(`[SPLITTER] Using chunk size: ${chunkSize}, overlap: ${chunkOverlap}`);
+        const codeSplitter = new AstCodeSplitter(chunkSize, chunkOverlap);
+
         // Initialize Claude Context
         this.context = new Context({
             embedding,
-            vectorDatabase
+            vectorDatabase,
+            codeSplitter
         });
 
         // Initialize managers
@@ -221,6 +229,20 @@ This tool is versatile and can be used before completing various tasks to retrie
                             required: ["path"]
                         }
                     },
+                    {
+                        name: "sync_index",
+                        description: `Synchronize the search index with file system changes. This performs an incremental update - only re-indexing files that have been added, modified, or removed since the last sync. Much faster than full re-indexing. Use this after git pull or file modifications to ensure search results are up-to-date.`,
+                        inputSchema: {
+                            type: "object",
+                            properties: {
+                                path: {
+                                    type: "string",
+                                    description: `ABSOLUTE path to the codebase directory to sync.`
+                                }
+                            },
+                            required: ["path"]
+                        }
+                    },
                 ]
             };
         });
@@ -238,6 +260,8 @@ This tool is versatile and can be used before completing various tasks to retrie
                     return await this.toolHandlers.handleClearIndex(args);
                 case "get_indexing_status":
                     return await this.toolHandlers.handleGetIndexingStatus(args);
+                case "sync_index":
+                    return await this.toolHandlers.handleSyncIndex(args);
 
                 default:
                     throw new Error(`Unknown tool: ${name}`);

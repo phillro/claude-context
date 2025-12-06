@@ -797,4 +797,85 @@ export class ToolHandlers {
             };
         }
     }
+
+    public async handleSyncIndex(args: any) {
+        const { path: codebasePath } = args;
+
+        try {
+            // Force absolute path resolution
+            const absolutePath = ensureAbsolutePath(codebasePath);
+
+            // Validate path exists
+            if (!fs.existsSync(absolutePath)) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: Path '${absolutePath}' does not exist. Original input: '${codebasePath}'`
+                    }],
+                    isError: true
+                };
+            }
+
+            // Check if it's a directory
+            const stat = fs.statSync(absolutePath);
+            if (!stat.isDirectory()) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: Path '${absolutePath}' is not a directory`
+                    }],
+                    isError: true
+                };
+            }
+
+            // Check if this codebase is indexed
+            const isIndexed = this.snapshotManager.getIndexedCodebases().includes(absolutePath);
+            if (!isIndexed) {
+                return {
+                    content: [{
+                        type: "text",
+                        text: `Error: Codebase '${absolutePath}' is not indexed. Please use index_codebase first.`
+                    }],
+                    isError: true
+                };
+            }
+
+            console.log(`[SYNC] 🔄 Starting sync for codebase: ${absolutePath}`);
+            const syncStartTime = Date.now();
+
+            // Perform incremental reindex using merkle DAG change detection
+            const stats = await this.context.reindexByChange(absolutePath);
+            const syncElapsed = Date.now() - syncStartTime;
+
+            console.log(`[SYNC] ✅ Sync completed in ${syncElapsed}ms. Added: ${stats.added}, Removed: ${stats.removed}, Modified: ${stats.modified}`);
+
+            const totalChanges = stats.added + stats.removed + stats.modified;
+            let resultMessage: string;
+
+            if (totalChanges === 0) {
+                resultMessage = `✅ Index for '${absolutePath}' is already up-to-date. No file changes detected.`;
+            } else {
+                resultMessage = `✅ Successfully synced index for '${absolutePath}'.\n`;
+                resultMessage += `📊 Changes: ${stats.added} added, ${stats.removed} removed, ${stats.modified} modified\n`;
+                resultMessage += `⏱️ Completed in ${syncElapsed}ms`;
+            }
+
+            return {
+                content: [{
+                    type: "text",
+                    text: resultMessage
+                }]
+            };
+
+        } catch (error: any) {
+            console.error(`[SYNC] ❌ Sync failed:`, error);
+            return {
+                content: [{
+                    type: "text",
+                    text: `Error syncing index: ${error.message || error}`
+                }],
+                isError: true
+            };
+        }
+    }
 } 
