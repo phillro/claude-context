@@ -365,20 +365,31 @@ export class Context {
         // Handle added and modified files
         const filesToIndex = [...added, ...modified].map(f => path.join(codebasePath, f));
 
-        if (filesToIndex.length > 0) {
-            await this.processFileList(
-                filesToIndex,
-                codebasePath,
-                (filePath, fileIndex, totalFiles) => {
-                    updateProgress(`Indexed ${filePath} (${fileIndex}/${totalFiles})`);
-                }
-            );
+        try {
+            if (filesToIndex.length > 0) {
+                await this.processFileList(
+                    filesToIndex,
+                    codebasePath,
+                    (filePath, fileIndex, totalFiles) => {
+                        updateProgress(`Indexed ${filePath} (${fileIndex}/${totalFiles})`);
+                    }
+                );
+            }
+
+            // Only commit merkle snapshot after successful vector indexing
+            // This ensures consistency between the merkle state and vector database
+            await currentSynchronizer.commitChanges();
+
+            console.log(`✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
+            progressCallback?.({ phase: 'Re-indexing complete!', current: totalChanges, total: totalChanges, percentage: 100 });
+
+            return { added: added.length, removed: removed.length, modified: modified.length };
+        } catch (error) {
+            // Discard pending merkle changes if indexing failed
+            currentSynchronizer.discardPendingChanges();
+            console.error(`❌ Re-indexing failed, merkle snapshot not updated:`, error);
+            throw error;
         }
-
-        console.log(`✅ Re-indexing complete. Added: ${added.length}, Removed: ${removed.length}, Modified: ${modified.length}`);
-        progressCallback?.({ phase: 'Re-indexing complete!', current: totalChanges, total: totalChanges, percentage: 100 });
-
-        return { added: added.length, removed: removed.length, modified: modified.length };
     }
 
     private async deleteFileChunks(collectionName: string, relativePath: string): Promise<void> {

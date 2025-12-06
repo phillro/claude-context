@@ -491,10 +491,10 @@ export class ToolHandlers {
 
                         if (hasChanges) {
                             console.log(`[SEARCH] ✅ Incremental sync completed: ${syncStats.added} added, ${syncStats.removed} removed, ${syncStats.modified} modified`);
-                            syncMessage = `\n🔄 **Auto-synced**: Found and indexed ${syncStats.added} added, ${syncStats.removed} removed, ${syncStats.modified} modified files before search.`;
+                            syncMessage = `\n🔄 **Auto-synced**: Indexed ${syncStats.added} added, ${syncStats.removed} removed, ${syncStats.modified} modified files.`;
                         } else {
                             console.log(`[SEARCH] ✅ Incremental sync completed: no changes detected`);
-                            syncMessage = `\n✅ **Auto-sync**: Checked for changes (last sync: ${ageSeconds !== null ? ageSeconds + 's ago' : 'never'}) - no updates needed.`;
+                            syncMessage = `\n✅ **Auto-sync**: No file changes detected (checked ${ageSeconds}s after last sync).`;
                         }
                     } catch (syncError: any) {
                         console.warn(`[SEARCH] ⚠️ Incremental sync failed, continuing with search:`, syncError.message || syncError);

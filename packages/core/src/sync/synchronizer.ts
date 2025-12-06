@@ -10,6 +10,9 @@ export class FileSynchronizer {
     private rootDir: string;
     private snapshotPath: string;
     private ignorePatterns: string[];
+    // Pending state for transactional updates - only committed after successful indexing
+    private pendingFileHashes?: Map<string, string>;
+    private pendingMerkleDAG?: MerkleDAG;
 
     constructor(rootDir: string, ignorePatterns: string[] = []) {
         this.rootDir = rootDir;
@@ -235,9 +238,11 @@ export class FileSynchronizer {
             console.log('Merkle DAG has changed. Comparing file states...');
             const fileChanges = this.compareStates(this.fileHashes, newFileHashes);
 
-            this.fileHashes = newFileHashes;
-            this.merkleDAG = newMerkleDAG;
-            await this.saveSnapshot();
+            // Store pending changes in memory but DON'T save to disk yet
+            // The snapshot should only be saved after successful vector indexing
+            // via commitChanges() to maintain consistency between merkle state and vectors
+            this.pendingFileHashes = newFileHashes;
+            this.pendingMerkleDAG = newMerkleDAG;
 
             console.log(`Found changes: ${fileChanges.added.length} added, ${fileChanges.removed.length} removed, ${fileChanges.modified.length} modified.`);
             return fileChanges;
@@ -245,6 +250,32 @@ export class FileSynchronizer {
 
         console.log('No changes detected based on Merkle DAG comparison.');
         return { added: [], removed: [], modified: [] };
+    }
+
+    /**
+     * Commit pending changes to the snapshot after successful vector indexing.
+     * This ensures the merkle snapshot stays in sync with the actual vector database.
+     */
+    public async commitChanges(): Promise<void> {
+        if (this.pendingFileHashes && this.pendingMerkleDAG) {
+            this.fileHashes = this.pendingFileHashes;
+            this.merkleDAG = this.pendingMerkleDAG;
+            await this.saveSnapshot();
+            console.log('✅ Committed changes to merkle snapshot');
+
+            // Clear pending state
+            this.pendingFileHashes = undefined;
+            this.pendingMerkleDAG = undefined;
+        }
+    }
+
+    /**
+     * Discard pending changes (e.g., if vector indexing failed).
+     */
+    public discardPendingChanges(): void {
+        this.pendingFileHashes = undefined;
+        this.pendingMerkleDAG = undefined;
+        console.log('⚠️ Discarded pending merkle changes');
     }
 
     private compareStates(oldHashes: Map<string, string>, newHashes: Map<string, string>): { added: string[], removed: string[], modified: string[] } {
@@ -296,7 +327,11 @@ export class FileSynchronizer {
         console.log(`Saved snapshot to ${this.snapshotPath}`);
     }
 
-    private async loadSnapshot(): Promise<void> {
+    /**
+     * Load snapshot from disk. Returns true if snapshot was found, false if not.
+     * When snapshot is not found, starts with empty state so all files appear as "added".
+     */
+    private async loadSnapshot(): Promise<boolean> {
         try {
             const data = await fs.readFile(this.snapshotPath, 'utf-8');
             const obj = JSON.parse(data);
@@ -311,12 +346,16 @@ export class FileSynchronizer {
                 this.merkleDAG = MerkleDAG.deserialize(obj.merkleDAG);
             }
             console.log(`Loaded snapshot from ${this.snapshotPath}`);
+            return true;
         } catch (error: any) {
             if (error.code === 'ENOENT') {
-                console.log(`Snapshot file not found at ${this.snapshotPath}. Generating new one.`);
-                this.fileHashes = await this.generateFileHashes(this.rootDir);
-                this.merkleDAG = this.buildMerkleDAG(this.fileHashes);
-                await this.saveSnapshot();
+                // DON'T auto-generate snapshot here - start with empty state
+                // This ensures checkForChanges() will detect all files as "added"
+                // and properly sync them to the vector database
+                console.log(`Snapshot file not found at ${this.snapshotPath}. Starting with empty state.`);
+                this.fileHashes = new Map();
+                this.merkleDAG = new MerkleDAG();
+                return false;
             } else {
                 throw error;
             }
