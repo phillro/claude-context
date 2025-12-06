@@ -5,6 +5,7 @@ export interface OpenAIEmbeddingConfig {
     model: string;
     apiKey: string;
     baseURL?: string; // OpenAI supports custom baseURL
+    maxTokens?: number; // Override max tokens for custom models (default varies by model)
 }
 
 export class OpenAIEmbedding extends Embedding {
@@ -20,6 +21,17 @@ export class OpenAIEmbedding extends Embedding {
             apiKey: config.apiKey,
             baseURL: config.baseURL,
         });
+
+        // Set maxTokens from config or known models
+        if (config.maxTokens) {
+            this.maxTokens = config.maxTokens;
+        } else {
+            const knownModels = OpenAIEmbedding.getSupportedModels();
+            if (knownModels[config.model]) {
+                this.maxTokens = knownModels[config.model].maxTokens;
+                this.dimension = knownModels[config.model].dimension;
+            }
+        }
     }
 
     async detectDimension(testText: string = "test"): Promise<number> {
@@ -156,21 +168,63 @@ export class OpenAIEmbedding extends Embedding {
     }
 
     /**
-     * Get list of supported models
+     * Get list of supported models with their dimensions and max token limits
      */
-    static getSupportedModels(): Record<string, { dimension: number; description: string }> {
+    static getSupportedModels(): Record<string, { dimension: number; maxTokens: number; description: string }> {
         return {
+            // OpenAI models
             'text-embedding-3-small': {
                 dimension: 1536,
+                maxTokens: 8192,
                 description: 'High performance and cost-effective embedding model (recommended)'
             },
             'text-embedding-3-large': {
                 dimension: 3072,
+                maxTokens: 8192,
                 description: 'Highest performance embedding model with larger dimensions'
             },
             'text-embedding-ada-002': {
                 dimension: 1536,
+                maxTokens: 8192,
                 description: 'Legacy model (use text-embedding-3-small instead)'
+            },
+            // BGE models (commonly used with vLLM)
+            'BAAI/bge-large-en-v1.5': {
+                dimension: 1024,
+                maxTokens: 512,
+                description: 'BGE large English embedding model (512 token limit)'
+            },
+            'BAAI/bge-base-en-v1.5': {
+                dimension: 768,
+                maxTokens: 512,
+                description: 'BGE base English embedding model (512 token limit)'
+            },
+            'BAAI/bge-small-en-v1.5': {
+                dimension: 384,
+                maxTokens: 512,
+                description: 'BGE small English embedding model (512 token limit)'
+            },
+            'BAAI/bge-m3': {
+                dimension: 1024,
+                maxTokens: 8192,
+                description: 'BGE M3 multilingual embedding model (8192 token limit)'
+            },
+            // Nomic models
+            'nomic-ai/nomic-embed-text-v1.5': {
+                dimension: 768,
+                maxTokens: 8192,
+                description: 'Nomic embed text model (8192 token limit)'
+            },
+            // E5 models
+            'intfloat/e5-large-v2': {
+                dimension: 1024,
+                maxTokens: 512,
+                description: 'E5 large English embedding model (512 token limit)'
+            },
+            'intfloat/e5-base-v2': {
+                dimension: 768,
+                maxTokens: 512,
+                description: 'E5 base English embedding model (512 token limit)'
             }
         };
     }
